@@ -100,6 +100,14 @@ def process_epg_streaming(stream, target_ids, output_xml_root=None):
         for event, elem in context:
             if event == 'start' and elem.tag == 'channel':
                 current_channel_id = elem.get('id')
+            
+            elif event == 'end' and elem.tag == 'display-name' and current_channel_id:
+                if elem.text:
+                    norm_display_name = normalize_name(elem.text)
+                    if norm_display_name:
+                        name_to_id[norm_display_name] = current_channel_id
+            
+            elif event == 'end' and elem.tag == 'channel':
                 if current_channel_id:
                     all_ids.add(current_channel_id)
                     norm_id = normalize_name(current_channel_id)
@@ -108,13 +116,14 @@ def process_epg_streaming(stream, target_ids, output_xml_root=None):
                     
                     # Se estivermos filtrando e o ID estiver nos alvos, adicionamos ao novo XML
                     if output_xml_root is not None and current_channel_id in target_ids:
-                        output_xml_root.append(elem)
-            
-            elif event == 'end' and elem.tag == 'display-name' and current_channel_id:
-                if elem.text:
-                    norm_display_name = normalize_name(elem.text)
-                    if norm_display_name:
-                        name_to_id[norm_display_name] = current_channel_id
+                        # Verifica se o canal já foi adicionado para evitar duplicatas
+                        if not any(c.get('id') == current_channel_id for c in output_xml_root.findall('channel')):
+                            output_xml_root.append(elem)
+                        else:
+                            elem.clear()
+                    else:
+                        elem.clear()
+                current_channel_id = None
             
             elif event == 'end' and elem.tag == 'programme':
                 prog_channel = elem.get('channel')
@@ -122,11 +131,6 @@ def process_epg_streaming(stream, target_ids, output_xml_root=None):
                     output_xml_root.append(elem)
                 else:
                     elem.clear()
-            
-            elif event == 'end' and elem.tag == 'channel':
-                if output_xml_root is None or elem.get('id') not in target_ids:
-                    elem.clear()
-                current_channel_id = None
                 
         return name_to_id, all_ids
     except Exception as e:
