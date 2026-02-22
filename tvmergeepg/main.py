@@ -114,14 +114,8 @@ def process_epg_streaming(stream, target_ids, output_xml_root=None):
                     if norm_id:
                         name_to_id[norm_id] = current_channel_id
                     
-                    # Se estivermos filtrando e o ID estiver nos alvos, adicionamos ao novo XML
-                    if output_xml_root is not None and current_channel_id in target_ids:
-                        # Verifica se o canal já foi adicionado para evitar duplicatas
-                        if not any(c.get('id') == current_channel_id for c in output_xml_root.findall('channel')):
-                            output_xml_root.append(elem)
-                        else:
-                            elem.clear()
-                    else:
+                    # Limpa elementos de canal para não duplicar, pois já adicionamos as definições básicas
+                    if output_xml_root is not None:
                         elem.clear()
                 current_channel_id = None
             
@@ -213,24 +207,41 @@ def main():
 
     print(f"Total de tvg-ids atualizados: {updated_count}")
 
-    # Terceiro passo: se solicitado, gerar o EPG filtrado
+    # Terceiro passo: gerar o EPG filtrado
     if args.epg_output:
         print(f"Gerando EPG filtrado para {len(final_target_ids)} canais...")
         new_epg_root = ET.Element("tv", {"generator-info-name": "tvmergeepg"})
         
-        for epg_url in all_epg_urls:
-            print(f"Filtrando EPG: {epg_url}")
-            stream = download_stream(epg_url)
-            if stream:
-                process_epg_streaming(stream, final_target_ids, new_epg_root)
-                if hasattr(stream, 'close'):
-                    stream.close()
+        # Adiciona definições básicas de canais ao novo EPG se eles tiverem ID (evitando duplicatas)
+        added_ids = set()
+        for channel in all_channels:
+            chan_id = channel.get('tvg-id')
+            if chan_id and chan_id not in invalid_ids and chan_id not in added_ids:
+                chan_elem = ET.SubElement(new_epg_root, "channel", {"id": chan_id})
+                ET.SubElement(chan_elem, "display-name").text = channel.get('name', chan_id)
+                added_ids.add(chan_id)
         
-        # Salvar como .xml.gz
-        with gzip.open(args.epg_output, 'wb') as f:
-            tree = ET.ElementTree(new_epg_root)
-            tree.write(f, encoding='utf-8', xml_declaration=True)
-        print(f"EPG filtrado salvo em: {args.epg_output}")
+        if all_epg_urls:
+            for epg_url in all_epg_urls:
+                print(f"Filtrando programas do EPG: {epg_url}")
+                stream = download_stream(epg_url)
+                if stream:
+                    process_epg_streaming(stream, final_target_ids, new_epg_root)
+                    if hasattr(stream, 'close'):
+                        stream.close()
+        
+        # Salvar como .xml.gz garantindo que o diretório existe
+        try:
+            output_dir = os.path.dirname(args.epg_output)
+            if output_dir and not os.path.exists(output_dir):
+                os.makedirs(output_dir)
+                
+            with gzip.open(args.epg_output, 'wb') as f:
+                tree = ET.ElementTree(new_epg_root)
+                tree.write(f, encoding='utf-8', xml_declaration=True)
+            print(f"EPG filtrado salvo com sucesso em: {args.epg_output}")
+        except Exception as e:
+            print(f"Erro ao salvar arquivo EPG: {e}")
 
     # Gerar o arquivo M3U final
     with open(args.output, 'w', encoding='utf-8') as f:
