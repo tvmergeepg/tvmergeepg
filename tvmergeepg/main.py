@@ -49,14 +49,14 @@ def parse_m3u(content):
             continue
             
         if line_strip.startswith('#EXTINF:'):
-            # Se já tínhamos um canal pendente sem URL, salvamos (embora incomum)
             if current_channel:
                 channels.append(current_channel)
                 
             current_channel = {
                 'info': line_strip,
-                'metadata': [], # Para armazenar #EXTVLCOPT e outras tags
+                'metadata': [],
                 'tvg-id': "",
+                'tvg-name': "",
                 'name': "",
                 'url': ""
             }
@@ -66,13 +66,17 @@ def parse_m3u(content):
             if tvg_id_match:
                 current_channel['tvg-id'] = tvg_id_match.group(1)
             
+            # Extrair tvg-name
+            tvg_name_match = re.search(r'tvg-name="([^"]*)"', line_strip)
+            if tvg_name_match:
+                current_channel['tvg-name'] = tvg_name_match.group(1)
+            
             # Extrair o nome do canal
             name_match = re.search(r',([^,]+)$', line_strip)
             if name_match:
                 current_channel['name'] = name_match.group(1).strip()
                 
         elif line_strip.startswith('#') and not line_strip.startswith('#EXTM3U') and current_channel:
-            # Capturar metadados como #EXTVLCOPT
             current_channel['metadata'].append(line_strip)
             
         elif (line_strip.startswith('http') or line_strip.startswith('rtmp') or line_strip.startswith('mms')) and current_channel:
@@ -147,14 +151,19 @@ def main():
     updated_count = 0
     for channel in all_channels:
         current_id = channel.get('tvg-id', "")
+        tvg_name = channel.get('tvg-name', "")
         name = channel.get('name', "")
         
+        # Se o tvg-id atual não for válido no EPG, tentamos encontrar pelo nome
         if not current_id or current_id not in global_epg_ids:
-            found_id = global_name_to_id.get(name.lower())
+            # Tentar encontrar pelo tvg-name primeiro, depois pelo nome do canal
+            found_id = global_name_to_id.get(tvg_name.lower()) or global_name_to_id.get(name.lower())
+            
             if found_id:
                 if f'tvg-id="{current_id}"' in channel['info']:
                     channel['info'] = channel['info'].replace(f'tvg-id="{current_id}"', f'tvg-id="{found_id}"')
                 else:
+                    # Se não houver tvg-id, insere após #EXTINF:-1
                     channel['info'] = channel['info'].replace('#EXTINF:-1', f'#EXTINF:-1 tvg-id="{found_id}"')
                 channel['tvg-id'] = found_id
                 updated_count += 1
@@ -169,7 +178,6 @@ def main():
         
         for channel in all_channels:
             f.write(f"{channel['info']}\n")
-            # Escrever metadados extras como #EXTVLCOPT
             for meta in channel.get('metadata', []):
                 f.write(f"{meta}\n")
             f.write(f"{channel['url']}\n")
