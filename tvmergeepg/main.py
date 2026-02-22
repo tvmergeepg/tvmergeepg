@@ -7,6 +7,13 @@ import re
 import os
 from io import BytesIO
 
+def normalize_name(name):
+    """Normaliza o nome do canal para comparação (minúsculas, sem espaços extras)."""
+    if not name:
+        return ""
+    # Remover espaços extras, converter para minúsculas e remover caracteres não alfanuméricos básicos
+    return re.sub(r'[^a-z0-9]', '', name.lower())
+
 def download_stream(url):
     """Baixa o conteúdo de uma URL e retorna um stream de bytes descompactado se necessário."""
     try:
@@ -105,18 +112,18 @@ def get_epg_data_streaming(stream):
                 current_channel_id = elem.get('id')
                 if current_channel_id:
                     all_ids.add(current_channel_id)
-                    name_to_id[current_channel_id.lower()] = current_channel_id
+                    # Mapear o ID normalizado para o ID original
+                    name_to_id[normalize_name(current_channel_id)] = current_channel_id
             
             elif event == 'end' and elem.tag == 'display-name' and current_channel_id:
                 if elem.text:
-                    name_to_id[elem.text.lower()] = current_channel_id
+                    # Mapear o nome normalizado para o ID original
+                    name_to_id[normalize_name(elem.text)] = current_channel_id
             
             elif event == 'end' and elem.tag == 'channel':
-                # Limpar o elemento para liberar memória
                 elem.clear()
                 current_channel_id = None
             
-            # Limpar elementos de programa (que são a maior parte do arquivo)
             elif event == 'end' and elem.tag == 'programme':
                 elem.clear()
                 
@@ -138,7 +145,6 @@ def main():
 
     for url in args.urls:
         print(f"Processando lista: {url}")
-        # Para a lista M3U, que costuma ser pequena, baixamos tudo de uma vez
         response = requests.get(url, timeout=30)
         if response.status_code == 200:
             channels, epg_urls = parse_m3u(response.text)
@@ -156,7 +162,6 @@ def main():
             print(f"  -> Encontrados {len(ids)} canais e {len(name_to_id)} nomes neste EPG.")
             global_name_to_id.update(name_to_id)
             global_epg_ids.update(ids)
-            # Tentar fechar o stream se possível
             if hasattr(stream, 'close'):
                 stream.close()
 
@@ -169,8 +174,10 @@ def main():
         tvg_name = channel.get('tvg-name', "")
         name = channel.get('name', "")
         
+        # Se o tvg-id atual não for válido no EPG, tentamos encontrar pelo nome normalizado
         if not current_id or current_id not in global_epg_ids:
-            found_id = global_name_to_id.get(tvg_name.lower()) or global_name_to_id.get(name.lower())
+            # Tentar encontrar pelo tvg-name normalizado primeiro, depois pelo nome do canal normalizado
+            found_id = global_name_to_id.get(normalize_name(tvg_name)) or global_name_to_id.get(normalize_name(name))
             
             if found_id:
                 if f'tvg-id="{current_id}"' in channel['info']:
