@@ -1,19 +1,28 @@
 import argparse
 import requests
 import gzip
+import lzma
 import xml.etree.ElementTree as ET
 import re
 import os
 from io import BytesIO
 
 def download_content(url):
-    """Baixa o conteúdo de uma URL, lidando com arquivos compactados .gz."""
+    """Baixa o conteúdo de uma URL, lidando com arquivos compactados .gz e .xz."""
     try:
         response = requests.get(url, timeout=30)
         response.raise_for_status()
+        
+        # Verificar se é .gz
         if url.endswith('.gz') or response.headers.get('Content-Type') == 'application/x-gzip':
             with gzip.GzipFile(fileobj=BytesIO(response.content)) as f:
-                return f.read().decode('utf-8')
+                return f.read().decode('utf-8', errors='ignore')
+        
+        # Verificar se é .xz
+        if url.endswith('.xz') or response.headers.get('Content-Type') == 'application/x-xz':
+            with lzma.open(BytesIO(response.content)) as f:
+                return f.read().decode('utf-8', errors='ignore')
+                
         return response.text
     except Exception as e:
         print(f"Erro ao baixar {url}: {e}")
@@ -25,14 +34,21 @@ def parse_m3u(content):
     epg_urls = []
     
     # Extrair URLs de EPG do cabeçalho #EXTM3U (x-tvg-url ou url-tvg)
+    # Suporta múltiplas URLs separadas por vírgula em uma única tag
     epg_matches = re.findall(r'(?:x-tvg-url|url-tvg)="([^"]+)"', content)
     for match in epg_matches:
-        epg_urls.extend(match.split(','))
+        # Dividir por vírgula e limpar espaços
+        urls = [u.strip() for u in match.split(',') if u.strip()]
+        epg_urls.extend(urls)
     
     # Extrair canais
     lines = content.splitlines()
     current_channel = None
     for line in lines:
+        line = line.strip()
+        if not line:
+            continue
+            
         if line.startswith('#EXTINF:'):
             current_channel = {'info': line}
             # Tentar extrair tvg-id e nome do canal
@@ -57,9 +73,15 @@ def parse_m3u(content):
 
 def get_epg_channels(epg_content):
     """Extrai IDs de canais de um conteúdo EPG XML."""
+    if not epg_content:
+        return set()
     try:
+        # Remover declaração XML se houver lixo antes dela
+        if '<?xml' in epg_content:
+            epg_content = epg_content[epg_content.find('<?xml'):]
+            
         root = ET.fromstring(epg_content)
-        return {channel.get('id') for channel in root.findall('channel')}
+        return {channel.get('id') for channel in root.findall('channel') if channel.get('id')}
     except Exception as e:
         print(f"Erro ao processar XML: {e}")
         return set()
@@ -90,11 +112,13 @@ def main():
         epg_content = download_content(epg_url)
         if epg_content:
             ids = get_epg_channels(epg_content)
+            print(f"  -> Encontrados {len(ids)} canais neste EPG.")
             epg_channel_ids.update(ids)
 
-    print(f"Total de IDs de canais no EPG: {len(epg_channel_ids)}")
+    print(f"Total de IDs de canais únicos no EPG: {len(epg_channel_ids)}")
 
     # Ajustar tvg-id se necessário
+    updated_count = 0
     for channel in all_channels:
         current_id = channel.get('tvg-id', "")
         name = channel.get('name', "")
@@ -107,6 +131,9 @@ def main():
                 # Se não houver tvg-id, insere após #EXTINF:-1
                 channel['info'] = channel['info'].replace('#EXTINF:-1', f'#EXTINF:-1 tvg-id="{name}"')
             channel['tvg-id'] = name
+            updated_count += 1
+
+    print(f"Total de tvg-ids atualizados: {updated_count}")
 
     # Gerar o arquivo final
     with open(args.output, 'w', encoding='utf-8') as f:
