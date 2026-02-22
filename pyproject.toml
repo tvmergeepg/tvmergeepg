@@ -1,0 +1,29 @@
+[project]
+name = "tvmergeepg"
+version = "0.1.0"
+authors = [
+    { name = "Manus AI", email = "ai@manus.im" },
+]
+description = "Um pacote Python para unir listas M3U e ajustar tvg-id com base em arquivos EPG XML/XML.gz."
+readme = "README.md"
+requires-python = ">=3.8"
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+]
+dependencies = [
+    "requests",
+    "xmltodict",
+]
+
+[project.urls]
+"Homepage" = "https://github.com/Manus-AI/tvmergeepg"
+"Bug Tracker" = "https://github.com/Manus-AI/tvmergeepg/issues"
+
+[project.scripts]
+tvmergeepg = "tvmergeepg.main:main"
+
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
