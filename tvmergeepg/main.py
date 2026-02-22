@@ -102,7 +102,9 @@ def process_epg_streaming(stream, target_ids, output_xml_root=None):
                 current_channel_id = elem.get('id')
                 if current_channel_id:
                     all_ids.add(current_channel_id)
-                    name_to_id[normalize_name(current_channel_id)] = current_channel_id
+                    norm_id = normalize_name(current_channel_id)
+                    if norm_id:
+                        name_to_id[norm_id] = current_channel_id
                     
                     # Se estivermos filtrando e o ID estiver nos alvos, adicionamos ao novo XML
                     if output_xml_root is not None and current_channel_id in target_ids:
@@ -110,7 +112,9 @@ def process_epg_streaming(stream, target_ids, output_xml_root=None):
             
             elif event == 'end' and elem.tag == 'display-name' and current_channel_id:
                 if elem.text:
-                    name_to_id[normalize_name(elem.text)] = current_channel_id
+                    norm_display_name = normalize_name(elem.text)
+                    if norm_display_name:
+                        name_to_id[norm_display_name] = current_channel_id
             
             elif event == 'end' and elem.tag == 'programme':
                 prog_channel = elem.get('channel')
@@ -174,7 +178,16 @@ def main():
         name = channel.get('name', "")
         
         if current_id in invalid_ids or current_id not in global_epg_ids:
-            found_id = global_name_to_id.get(normalize_name(tvg_name)) or global_name_to_id.get(normalize_name(name))
+            norm_tvg_name = normalize_name(tvg_name)
+            norm_name = normalize_name(name)
+            found_id = None
+            
+            if norm_tvg_name:
+                found_id = global_name_to_id.get(norm_tvg_name)
+            
+            if not found_id and norm_name:
+                found_id = global_name_to_id.get(norm_name)
+            
             if found_id:
                 if f'tvg-id="{current_id}"' in channel['info']:
                     channel['info'] = channel['info'].replace(f'tvg-id="{current_id}"', f'tvg-id="{found_id}"')
