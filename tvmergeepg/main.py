@@ -34,10 +34,8 @@ def parse_m3u(content):
     epg_urls = []
     
     # Extrair URLs de EPG do cabeçalho #EXTM3U (x-tvg-url ou url-tvg)
-    # Suporta múltiplas URLs separadas por vírgula em uma única tag
     epg_matches = re.findall(r'(?:x-tvg-url|url-tvg)="([^"]+)"', content)
     for match in epg_matches:
-        # Dividir por vírgula e limpar espaços
         urls = [u.strip() for u in match.split(',') if u.strip()]
         epg_urls.extend(urls)
     
@@ -51,19 +49,11 @@ def parse_m3u(content):
             
         if line.startswith('#EXTINF:'):
             current_channel = {'info': line}
-            # Tentar extrair tvg-id e nome do canal
             tvg_id_match = re.search(r'tvg-id="([^"]*)"', line)
-            if tvg_id_match:
-                current_channel['tvg-id'] = tvg_id_match.group(1)
-            else:
-                current_channel['tvg-id'] = ""
+            current_channel['tvg-id'] = tvg_id_match.group(1) if tvg_id_match else ""
             
-            # Extrair o nome do canal (texto após a última vírgula)
             name_match = re.search(r',([^,]+)$', line)
-            if name_match:
-                current_channel['name'] = name_match.group(1).strip()
-            else:
-                current_channel['name'] = ""
+            current_channel['name'] = name_match.group(1).strip() if name_match else ""
         elif (line.startswith('http') or line.startswith('rtmp') or line.startswith('mms')) and current_channel:
             current_channel['url'] = line
             channels.append(current_channel)
@@ -71,20 +61,37 @@ def parse_m3u(content):
             
     return channels, epg_urls
 
-def get_epg_channels(epg_content):
-    """Extrai IDs de canais de um conteúdo EPG XML."""
+def get_epg_data(epg_content):
+    """Extrai IDs e display-names de canais de um conteúdo EPG XML."""
     if not epg_content:
-        return set()
+        return {}, set()
     try:
-        # Remover declaração XML se houver lixo antes dela
         if '<?xml' in epg_content:
             epg_content = epg_content[epg_content.find('<?xml'):]
             
         root = ET.fromstring(epg_content)
-        return {channel.get('id') for channel in root.findall('channel') if channel.get('id')}
+        
+        # Mapeamento de display-name para channel-id
+        name_to_id = {}
+        all_ids = set()
+        
+        for channel in root.findall('channel'):
+            channel_id = channel.get('id')
+            if not channel_id:
+                continue
+            all_ids.add(channel_id)
+            
+            # Adicionar o próprio ID como um nome possível
+            name_to_id[channel_id.lower()] = channel_id
+            
+            for display_name in channel.findall('display-name'):
+                if display_name.text:
+                    name_to_id[display_name.text.lower()] = channel_id
+                    
+        return name_to_id, all_ids
     except Exception as e:
         print(f"Erro ao processar XML: {e}")
-        return set()
+        return {}, set()
 
 def main():
     parser = argparse.ArgumentParser(description="Unir listas M3U e ajustar tvg-id com base em EPG.")
@@ -94,7 +101,10 @@ def main():
 
     all_channels = []
     all_epg_urls = set()
-    epg_channel_ids = set()
+    
+    # Mapeamento global de nomes para IDs e conjunto de todos os IDs válidos
+    global_name_to_id = {}
+    global_epg_ids = set()
 
     for url in args.urls:
         print(f"Processando lista: {url}")
@@ -111,11 +121,12 @@ def main():
         print(f"Processando EPG: {epg_url}")
         epg_content = download_content(epg_url)
         if epg_content:
-            ids = get_epg_channels(epg_content)
-            print(f"  -> Encontrados {len(ids)} canais neste EPG.")
-            epg_channel_ids.update(ids)
+            name_to_id, ids = get_epg_data(epg_content)
+            print(f"  -> Encontrados {len(ids)} canais e {len(name_to_id)} nomes neste EPG.")
+            global_name_to_id.update(name_to_id)
+            global_epg_ids.update(ids)
 
-    print(f"Total de IDs de canais únicos no EPG: {len(epg_channel_ids)}")
+    print(f"Total de IDs de canais únicos no EPG: {len(global_epg_ids)}")
 
     # Ajustar tvg-id se necessário
     updated_count = 0
@@ -123,15 +134,19 @@ def main():
         current_id = channel.get('tvg-id', "")
         name = channel.get('name', "")
         
-        # Se o tvg-id atual não estiver no EPG, mas o nome estiver, atualizamos
-        if (not current_id or current_id not in epg_channel_ids) and name in epg_channel_ids:
-            if f'tvg-id="{current_id}"' in channel['info']:
-                channel['info'] = channel['info'].replace(f'tvg-id="{current_id}"', f'tvg-id="{name}"')
-            else:
-                # Se não houver tvg-id, insere após #EXTINF:-1
-                channel['info'] = channel['info'].replace('#EXTINF:-1', f'#EXTINF:-1 tvg-id="{name}"')
-            channel['tvg-id'] = name
-            updated_count += 1
+        # Se o tvg-id atual não for válido no EPG, tentamos encontrar pelo nome
+        if not current_id or current_id not in global_epg_ids:
+            # Tentar encontrar pelo nome do canal (case-insensitive)
+            found_id = global_name_to_id.get(name.lower())
+            
+            if found_id:
+                if f'tvg-id="{current_id}"' in channel['info']:
+                    channel['info'] = channel['info'].replace(f'tvg-id="{current_id}"', f'tvg-id="{found_id}"')
+                else:
+                    # Se não houver tvg-id, insere após #EXTINF:-1
+                    channel['info'] = channel['info'].replace('#EXTINF:-1', f'#EXTINF:-1 tvg-id="{found_id}"')
+                channel['tvg-id'] = found_id
+                updated_count += 1
 
     print(f"Total de tvg-ids atualizados: {updated_count}")
 
