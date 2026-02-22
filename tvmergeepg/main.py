@@ -189,10 +189,13 @@ def main():
                 found_id = global_name_to_id.get(norm_name)
             
             if found_id:
-                if f'tvg-id="{current_id}"' in channel['info']:
-                    channel['info'] = channel['info'].replace(f'tvg-id="{current_id}"', f'tvg-id="{found_id}"')
+                # Se já existe tvg-id (mesmo que inválido), substitui preservando o resto da linha
+                if re.search(r'tvg-id="[^"]*"', channel['info']):
+                    channel['info'] = re.sub(r'tvg-id="[^"]*"', f'tvg-id="{found_id}"', channel['info'])
                 else:
-                    channel['info'] = channel['info'].replace('#EXTINF:-1', f'#EXTINF:-1 tvg-id="{found_id}"')
+                    # Se não existe, insere após o #EXTINF:-1 ou #EXTINF:0
+                    channel['info'] = re.sub(r'(#EXTINF:-?\d+)', r'\1 tvg-id="' + found_id + '"', channel['info'])
+                
                 channel['tvg-id'] = found_id
                 updated_count += 1
         
