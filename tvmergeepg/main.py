@@ -141,8 +141,13 @@ def main():
     parser = argparse.ArgumentParser(description="Unir listas M3U e ajustar tvg-id com base em EPG.")
     parser.add_argument("urls", nargs='+', help="URLs das listas M3U para unir.")
     parser.add_argument("-o", "--output", default="merged.m3u", help="Nome do arquivo de saída M3U.")
-    parser.add_argument("-e", "--epg-output", help="Nome do arquivo de saída EPG (.xml.gz).")
+    parser.add_argument("-e", "--epg-output", help="Nome do arquivo de saída EPG (.xml.gz). Se não for fornecido, será gerado automaticamente baseado no nome da saída M3U.")
     args = parser.parse_args()
+
+    # Se epg_output não for fornecido, gera um nome padrão baseado no output M3U
+    if not args.epg_output:
+        base_name = os.path.splitext(args.output)[0]
+        args.epg_output = f"{base_name}.xml.gz"
 
     all_channels = []
     all_epg_urls = set()
@@ -229,9 +234,9 @@ def main():
 
     # Gerar o arquivo M3U final
     with open(args.output, 'w', encoding='utf-8') as f:
-        f.write("#EXTM3U\n")
-        if all_epg_urls:
-            f.write(f'#EXTM3U x-tvg-url="{",".join(all_epg_urls)}"\n')
+        # Adiciona a URL do EPG gerado localmente como a primeira opção no cabeçalho
+        epg_urls_list = [args.epg_output] + list(all_epg_urls)
+        f.write(f'#EXTM3U x-tvg-url="{",".join(epg_urls_list)}"\n')
         
         for channel in all_channels:
             f.write(f"{channel['info']}\n")
