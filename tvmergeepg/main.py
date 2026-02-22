@@ -7,23 +7,23 @@ import re
 import os
 from io import BytesIO
 
-def download_content(url):
-    """Baixa o conteúdo de uma URL, lidando com arquivos compactados .gz e .xz."""
+def download_stream(url):
+    """Baixa o conteúdo de uma URL e retorna um stream de bytes descompactado se necessário."""
     try:
-        response = requests.get(url, timeout=30)
+        response = requests.get(url, stream=True, timeout=60)
         response.raise_for_status()
         
+        content_type = response.headers.get('Content-Type', '')
+        
         # Verificar se é .gz
-        if url.endswith('.gz') or response.headers.get('Content-Type') == 'application/x-gzip':
-            with gzip.GzipFile(fileobj=BytesIO(response.content)) as f:
-                return f.read().decode('utf-8', errors='ignore')
+        if url.endswith('.gz') or 'gzip' in content_type:
+            return gzip.GzipFile(fileobj=BytesIO(response.content))
         
         # Verificar se é .xz
-        if url.endswith('.xz') or response.headers.get('Content-Type') == 'application/x-xz':
-            with lzma.open(BytesIO(response.content)) as f:
-                return f.read().decode('utf-8', errors='ignore')
-                
-        return response.text
+        if url.endswith('.xz') or 'xz' in content_type:
+            return lzma.LZMAFile(BytesIO(response.content))
+            
+        return BytesIO(response.content)
     except Exception as e:
         print(f"Erro ao baixar {url}: {e}")
         return None
@@ -86,33 +86,44 @@ def parse_m3u(content):
             
     return channels, epg_urls
 
-def get_epg_data(epg_content):
-    """Extrai IDs e display-names de canais de um conteúdo EPG XML."""
-    if not epg_content:
+def get_epg_data_streaming(stream):
+    """Extrai IDs e display-names de canais de um stream EPG XML usando iterparse para economizar memória."""
+    if not stream:
         return {}, set()
+    
+    name_to_id = {}
+    all_ids = set()
+    
     try:
-        if '<?xml' in epg_content:
-            epg_content = epg_content[epg_content.find('<?xml'):]
-            
-        root = ET.fromstring(epg_content)
-        name_to_id = {}
-        all_ids = set()
+        # Usar iterparse para processar o XML elemento por elemento
+        context = ET.iterparse(stream, events=('start', 'end'))
         
-        for channel in root.findall('channel'):
-            channel_id = channel.get('id')
-            if not channel_id:
-                continue
-            all_ids.add(channel_id)
-            name_to_id[channel_id.lower()] = channel_id
+        current_channel_id = None
+        
+        for event, elem in context:
+            if event == 'start' and elem.tag == 'channel':
+                current_channel_id = elem.get('id')
+                if current_channel_id:
+                    all_ids.add(current_channel_id)
+                    name_to_id[current_channel_id.lower()] = current_channel_id
             
-            for display_name in channel.findall('display-name'):
-                if display_name.text:
-                    name_to_id[display_name.text.lower()] = channel_id
-                    
+            elif event == 'end' and elem.tag == 'display-name' and current_channel_id:
+                if elem.text:
+                    name_to_id[elem.text.lower()] = current_channel_id
+            
+            elif event == 'end' and elem.tag == 'channel':
+                # Limpar o elemento para liberar memória
+                elem.clear()
+                current_channel_id = None
+            
+            # Limpar elementos de programa (que são a maior parte do arquivo)
+            elif event == 'end' and elem.tag == 'programme':
+                elem.clear()
+                
         return name_to_id, all_ids
     except Exception as e:
-        print(f"Erro ao processar XML: {e}")
-        return {}, set()
+        print(f"Erro ao processar XML via streaming: {e}")
+        return name_to_id, all_ids
 
 def main():
     parser = argparse.ArgumentParser(description="Unir listas M3U e ajustar tvg-id com base em EPG.")
@@ -127,9 +138,10 @@ def main():
 
     for url in args.urls:
         print(f"Processando lista: {url}")
-        content = download_content(url)
-        if content:
-            channels, epg_urls = parse_m3u(content)
+        # Para a lista M3U, que costuma ser pequena, baixamos tudo de uma vez
+        response = requests.get(url, timeout=30)
+        if response.status_code == 200:
+            channels, epg_urls = parse_m3u(response.text)
             all_channels.extend(channels)
             all_epg_urls.update(epg_urls)
 
@@ -138,12 +150,15 @@ def main():
 
     for epg_url in all_epg_urls:
         print(f"Processando EPG: {epg_url}")
-        epg_content = download_content(epg_url)
-        if epg_content:
-            name_to_id, ids = get_epg_data(epg_content)
+        stream = download_stream(epg_url)
+        if stream:
+            name_to_id, ids = get_epg_data_streaming(stream)
             print(f"  -> Encontrados {len(ids)} canais e {len(name_to_id)} nomes neste EPG.")
             global_name_to_id.update(name_to_id)
             global_epg_ids.update(ids)
+            # Tentar fechar o stream se possível
+            if hasattr(stream, 'close'):
+                stream.close()
 
     print(f"Total de IDs de canais únicos no EPG: {len(global_epg_ids)}")
 
@@ -154,16 +169,13 @@ def main():
         tvg_name = channel.get('tvg-name', "")
         name = channel.get('name', "")
         
-        # Se o tvg-id atual não for válido no EPG, tentamos encontrar pelo nome
         if not current_id or current_id not in global_epg_ids:
-            # Tentar encontrar pelo tvg-name primeiro, depois pelo nome do canal
             found_id = global_name_to_id.get(tvg_name.lower()) or global_name_to_id.get(name.lower())
             
             if found_id:
                 if f'tvg-id="{current_id}"' in channel['info']:
                     channel['info'] = channel['info'].replace(f'tvg-id="{current_id}"', f'tvg-id="{found_id}"')
                 else:
-                    # Se não houver tvg-id, insere após #EXTINF:-1
                     channel['info'] = channel['info'].replace('#EXTINF:-1', f'#EXTINF:-1 tvg-id="{found_id}"')
                 channel['tvg-id'] = found_id
                 updated_count += 1
