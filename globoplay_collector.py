@@ -21,7 +21,7 @@ M3U_FILE = os.path.join(OUTPUT_DIR, "globoplay.m3u")
 
 AGORA_NA_TV_URL = "https://globoplay.globo.com/agora-na-tv/"
 GLOBO_INTERNACIONAL_URL = "https://globoplay.globo.com/v/7832875/"
-GLOBONEWS_URL = "https://globoplay.globo.com/v/61910/"
+GLOBONEWS_URL = "https://globoplay.globo.com/globonews/ao-vivo/7339101/"
 
 SELENIUM_PROFILE = "/root/selenium-profile"
 
