@@ -184,10 +184,15 @@ def capture_channel(driver, name, url, max_wait=60):
 def discover_bbb(driver):
     logging.info("Abrindo Agora na TV...")
     driver.get(AGORA_NA_TV_URL)
-    time.sleep(6)
+    time.sleep(10) # Espera maior para carregar os canais
+    
+    # Rola para baixo para garantir o carregamento de todos os canais
     driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
-    time.sleep(2)
+    time.sleep(3)
 
+    # Procura por todos os cards de canais
+    # O seletor abaixo tenta capturar o link que contém o título do canal BBB
+    # Na página "Agora na TV", os canais BBB costumam ter "Big Brother Brasil" no aria-label ou texto próximo
     links = driver.find_elements(By.CSS_SELECTOR, "a[href*='/v/'], a[href*='/ao-vivo/']")
     channels = []
     seen = set()
@@ -197,13 +202,39 @@ def discover_bbb(driver):
         if not href or href in seen:
             continue
 
-        seen.add(href)
-        name = a.get_attribute("aria-label") or "BBB ao vivo"
+        # Tenta extrair o título exato que aparece na interface (ex: "Acompanhe a Casa", "Segue o Líder")
+        # Geralmente está dentro de um elemento de texto dentro do link ou no aria-label formatado
+        aria_label = a.get_attribute("aria-label") or ""
+        
+        # Se o canal for do BBB, processamos
+        if "big brother brasil" in aria_label.lower() or "bbb" in aria_label.lower():
+            seen.add(href)
+            
+            # Limpeza do nome para pegar apenas a parte relevante (ex: "Acompanhe a Casa")
+            # O aria-label costuma ser algo como "Canal Big Brother Brasil, Acompanhe a Casa, Ao vivo..."
+            name = "BBB ao vivo"
+            if "," in aria_label:
+                parts = [p.strip() for p in aria_label.split(",")]
+                # O segundo elemento geralmente é o nome da câmera/canal específico
+                if len(parts) > 1:
+                    name = parts[1]
+            
+            # Caso não consiga pelo aria-label, tenta buscar o texto visível dentro do elemento
+            if name == "BBB ao vivo" or "Big Brother Brasil" in name:
+                try:
+                    # Tenta encontrar o texto do título dentro do card (ex: p ou span com o nome)
+                    inner_text = a.text.split('\n')[-1] # Geralmente o nome do canal é a última linha de texto no card
+                    if inner_text and len(inner_text) > 3:
+                        name = inner_text
+                except:
+                    pass
 
-        if "bbb" in name.lower():
             channels.append((name.strip(), href))
 
-    logging.info(f"✓ BBB encontrados: {len(channels)}")
+    logging.info(f"✓ Canais BBB encontrados: {len(channels)}")
+    for n, h in channels:
+        logging.info(f"  - {n}: {h}")
+        
     return channels
 
 # ================= GERAR NOME DE ARQUIVO =================
@@ -215,6 +246,7 @@ def generate_filename(channel_name):
     year = str(now.year)
 
     channel_prefix = "SBTVD"
+    # Remove caracteres especiais e espaços para o nome do arquivo
     event_name = channel_name.upper().replace(" ", "_")
 
     return f"{date_part}_{time_part}_{channel_prefix}_{event_name}_{year}.mp4"
